@@ -3,11 +3,8 @@ langchain
 langchain-core
 langchain-community
 langchain-google-genai
-langchain-huggingface
+langchain-text-splitters
 faiss-cpu
 PyPDF2
-google-ai-generativelanguage
 pandas
-sentence-transformers
-transformers
-wikipedia
+python-dotenv

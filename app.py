@@ -3,7 +3,6 @@ import streamlit as st
 from PyPDF2 import PdfReader
 import pandas as pd
 import base64
-import os
 
 # import for langchain
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -41,13 +40,26 @@ def get_text_chunks(text, modal_name):
 
 # embedding this chunks and storing in vector database :
 def get_vectorstore(text_chunks, modal_name, api_key=None):
-    if modal_name == "Google AI":
-        embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", api_key=api_key)
-    else:
-        raise ValueError(f"Unsupported model: {modal_name}")
-
-    vectorstore = FAISS.from_documents(text_chunks, embedding=embeddings)
-    return vectorstore
+    if api_key is None or not api_key.strip():
+        raise ValueError("API key is missing or empty. Please provide a valid Google API key.")
+    
+    if not text_chunks:
+        raise ValueError("No text chunks to embed.")
+    
+    try:
+        if modal_name == "Google AI":
+            print(f"Using embedding model: embedding-001")
+            print(f"API key provided: {bool(api_key)}")
+            embeddings = GoogleGenerativeAIEmbeddings(model="embedding-001", google_api_key=api_key)
+            print(f"Embedding {len(text_chunks)} chunks...")
+            vectorstore = FAISS.from_documents(text_chunks, embedding=embeddings)
+            return vectorstore
+        else:
+            raise ValueError(f"Unsupported model: {modal_name}")
+    except Exception as e:
+        error_msg = str(e)
+        print(f"Vectorstore creation error: {error_msg}")
+        raise ValueError(f"Failed to create vectorstore: {error_msg}")
 
 #create a conversational chain using langchain :
 def get_conversation_chain(modal_name, vectorstore=None, api_key=None):
@@ -71,30 +83,54 @@ def get_conversation_chain(modal_name, vectorstore=None, api_key=None):
 
 # take user question as input :
 def user_input(user_question, model_name, api_key, pdf_docs):
-    if api_key is None or not pdf_docs:
-        st.warning("Please upload a PDF document and enter your API key.")
+    if api_key is None or not api_key.strip() or not pdf_docs:
+        st.error("❌ Please upload a PDF document and enter a valid Google API key.")
         return None
 
-    text_chunks = get_text_chunks(get_pdf_text(pdf_docs), model_name)
-    vectorstore = get_vectorstore(text_chunks, model_name, api_key)
+    try:
+        pdf_text = get_pdf_text(pdf_docs)
+        if not pdf_text.strip():
+            st.error("❌ No text could be extracted from the PDF files. Please check your PDFs.")
+            return None
+        
+        text_chunks = get_text_chunks(pdf_text, model_name)
+        if not text_chunks:
+            st.error("❌ Could not split text into chunks. Please check your PDF content.")
+            return None
+        
+        vectorstore = get_vectorstore(text_chunks, model_name, api_key)
+    except ValueError as e:
+        st.error(f"❌ Validation Error: {str(e)}")
+        return None
+    except Exception as e:
+        error_msg = str(e)
+        st.error(f"❌ Processing Error: {error_msg}")
+        print(f"Full error traceback: {error_msg}")
+        return None
 
     if model_name == "Google AI":
-        chain = get_conversation_chain(model_name, vectorstore=vectorstore, api_key=api_key)
-        response = chain.invoke(user_question)
-        user_question_output = user_question
-        response_output = response
-        pdf_names = [pdf.name for pdf in pdf_docs] if pdf_docs else []
-        st.session_state.conversation_history.append(
-            (
-                user_question_output,
-                response_output,
-                model_name,
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                ", ".join(pdf_names),
+        try:
+            chain = get_conversation_chain(model_name, vectorstore=vectorstore, api_key=api_key)
+            response = chain.invoke(user_question)
+            user_question_output = user_question
+            response_output = response
+            pdf_names = [pdf.name for pdf in pdf_docs] if pdf_docs else []
+            st.session_state.conversation_history.append(
+                (
+                    user_question_output,
+                    response_output,
+                    model_name,
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    ", ".join(pdf_names),
+                )
             )
-        )
+        except Exception as e:
+            error_msg = str(e)
+            st.error(f"❌ Chat Error: {error_msg}")
+            print(f"Chain invocation error: {error_msg}")
+            return None
     else:
-        st.warning("Selected model is not supported.")
+        st.error("❌ Selected model is not supported.")
         return None
 
     st.markdown(
@@ -253,7 +289,7 @@ def main():
     user_question = st.text_input("Ask a Question from the PDF Files")
 
     if user_question:
-        user_input(user_question, model_name, api_key, pdf_docs, st.session_state.conversation_history)
+        user_input(user_question, model_name, api_key, pdf_docs)
         st.session_state.user_question = ""  # Clear user question input 
 
 if __name__ == "__main__":
