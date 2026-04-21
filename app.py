@@ -38,6 +38,8 @@ def get_text_chunks(text, modal_name):
     chunks = text_splitter.create_documents([text])
     return chunks
 
+import google.generativeai as genai
+
 # embedding this chunks and storing in vector database :
 def get_vectorstore(text_chunks, modal_name, api_key=None):
     if api_key is None or not api_key.strip():
@@ -46,27 +48,73 @@ def get_vectorstore(text_chunks, modal_name, api_key=None):
     if not text_chunks:
         raise ValueError("No text chunks to embed.")
     
-    try:
-        if modal_name == "Google AI":
-            print(f"Using embedding model: embedding-001")
-            print(f"API key provided: {bool(api_key)}")
-            embeddings = GoogleGenerativeAIEmbeddings(model="embedding-001", google_api_key=api_key)
-            print(f"Embedding {len(text_chunks)} chunks...")
-            vectorstore = FAISS.from_documents(text_chunks, embedding=embeddings)
-            return vectorstore
-        else:
-            raise ValueError(f"Unsupported model: {modal_name}")
-    except Exception as e:
-        error_msg = str(e)
+    if modal_name == "Google AI":
+        # Verified working models from diagnostics
+        model_options = [
+            "models/gemini-embedding-001",
+            "gemini-embedding-001",
+            "text-embedding-004",         
+            "models/text-embedding-004",  
+            "embedding-001",              
+            "models/embedding-001"        
+        ]
+        
+        last_exception = None
+        for model_id in model_options:
+            try:
+                print(f"DEBUG: Attempting LangChain embedding with model: {model_id}")
+                embeddings = GoogleGenerativeAIEmbeddings(
+                    model=model_id, 
+                    google_api_key=api_key
+                )
+                # Test with a dummy embed to confirm it works
+                embeddings.embed_query("health check")
+                
+                print(f"DEBUG: Successfully initialized LangChain model: {model_id}")
+                vectorstore = FAISS.from_documents(text_chunks, embedding=embeddings)
+                return vectorstore
+            except Exception as e:
+                print(f"DEBUG: LangChain failed for {model_id}: {str(e)}")
+                last_exception = e
+                continue
+        
+        # FINAL FALLBACK: Use the official google-generativeai SDK directly
+        print("DEBUG: All LangChain models failed. Attempting direct SDK embedding fallback...")
+        try:
+            genai.configure(api_key=api_key)
+            working_model = None
+            for m in genai.list_models():
+                if 'embedContent' in m.supported_generation_methods:
+                    try:
+                        genai.embed_content(model=m.name, content="test", task_type="retrieval_document")
+                        working_model = m.name
+                        print(f"DEBUG: Found working model via direct SDK: {working_model}")
+                        break
+                    except:
+                        continue
+            
+            if working_model:
+                embeddings = GoogleGenerativeAIEmbeddings(
+                    model=working_model, 
+                    google_api_key=api_key
+                )
+                vectorstore = FAISS.from_documents(text_chunks, embedding=embeddings)
+                return vectorstore
+        except Exception as sdk_e:
+            print(f"DEBUG: Direct SDK fallback failed: {str(sdk_e)}")
+
+        error_msg = str(last_exception) if last_exception else "Unknown error"
         print(f"Vectorstore creation error: {error_msg}")
-        raise ValueError(f"Failed to create vectorstore: {error_msg}")
+        raise ValueError(f"Failed to create vectorstore with any available model: {error_msg}")
+    else:
+        raise ValueError(f"Unsupported model: {modal_name}")
 
 #create a conversational chain using langchain :
 def get_conversation_chain(modal_name, vectorstore=None, api_key=None):
     if modal_name == "Google AI":
         prompt_template = (
             "Use the following pieces of context to answer the question at the end. "
-            "If you don't know the answer, say you don't know. {context} Question: {question} Answer:"
+            "If you don't know the answer, say you don't know.\n\nContext:\n{context}\n\nQuestion: {question}\n\nAnswer:"
         )
         model = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0.3, google_api_key=api_key)
     else:
